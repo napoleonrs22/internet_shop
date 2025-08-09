@@ -27,6 +27,19 @@ class CartMixin:
         request.session.modified = True
         return cart
 
+class CartModalView(CartMixin, View):
+    def get(self, request):
+        cart = self.get_cart(request)
+        context = {
+            'cart': cart,
+            'cart_items': cart.items.select_related(
+                'product',
+                'product_size__size'
+            ).order_by('-added_at'),
+        }
+        return  TemplateResponse(request, 'cart/cart_modal.html',context)
+
+
 class AddToCartView(View, CartMixin):
     @transaction.atomic
     def post(self, request,slug):
@@ -85,11 +98,103 @@ class AddToCartView(View, CartMixin):
                 'cart_item_id':cart_item.id
             })
 
+class UpdateCartItemView(View, CartMixin):
+    @transaction.atomic
+    def post(self, request,item_id):
+        cart = self.get_cart(request)
+        cart_item = get_object_or_404(CartItem, id=item_id,cart=cart)
+
+        quantity = int(request.POST.get('quantity',1))
+
+        if quantity < 0:
+            return JsonResponse({
+                'error': 'Invalid quantity',
+
+            },status=400)
+
+        if quantity == 0:
+            cart_item.delete()
+        else:
+            if quantity > cart_item.product_size.stock:
+                return JsonResponse({
+                    'error': f'Only{cart_item.product_size.stock} product stock allowed',
+                },status=400)
+            cart_item.quantity = quantity
+            cart_item.save()
+
+        request.session['cart_id'] = cart.id
+        request.session.modified = True
+
+        context = {
+            'cart': cart,
+            'cart_item': cart.items.select_related(
+                'product',
+                'product__size',
+            ).order_by('added_at'),
+        }
+        return  TemplateResponse(request, 'cart/cart_modal.html',context)
+
+class RemoveCartItemView(CartMixin, View):
+    def post(self, request,item_id):
+        cart = self.get_cart(request)
+        try:
+            cart_item = cart.items.get(id=item_id)
+            cart_item.delete()
+
+            request.session['cart_id'] = cart.id
+            request.session.modified = True
+
+            context = {
+                'cart': cart,
+                'cart_item': cart.items.select_related(
+                    'product',
+                    'product__size',
+                ).order_by('-added_at')
+            }
+            return TemplateResponse(request, 'cart/cart_modal.html',context)
+        except CartItem.DoesNotExist:
+            return JsonResponse({
+                'error': 'Item not found',
+            },status=400)
 
 
-            '''product = form.cleaned_data['product']
-            quantity = form.cleaned_data['quantity']
+class CartCountView(CartMixin, View):
+    def get(self, request):
+        cart = self.get_cart(request)
+        return JsonResponse({
+            'total_items': cart.total_items,
+            'subtotal':float(cart.subtotal),
+        })
 
-            product.quantity = quantity
-            product.save()
-            '''
+class ClearCartView(CartMixin, View):
+    def post(self, request):
+        cart = self.get_cart(request)
+        cart.clear()
+
+        request.session['cart_id'] = cart.id
+        request.session.modified = True
+
+        if request.headers.get('HX-Request'):
+            return  TemplateResponse(request, 'cart/cart_empty.html',{
+                'cart': cart,
+            })
+        return JsonResponse({
+            'success': True,
+            'message':"Cart cleared",
+        })
+
+
+class CartSummeryView(CartMixin, View):
+    def get(self, request):
+        cart = self.get_cart(request)
+        context = {
+            'cart': cart,
+            'cart_items': cart.items.select_related(
+                'product',
+                'product_size__size'
+            ).order_by('-added_at'),
+        }
+        return TemplateResponse(request, 'cart/cart_summary.html',context)
+
+
+
